@@ -7,6 +7,7 @@
 
 namespace bminor {
 
+using std::exchange;
 using std::find;
 using std::initializer_list;
 using std::make_unique;
@@ -60,15 +61,16 @@ public:
     ParseResult program() {
         auto root = make_unique<Node>(NodeKind::Program, Span{});
         root->span.end = tokens_.back()->span.end;
-        vector<Diagnostic> diagnostics;
-        try {
-            while (!at(Kind::EndOfFile)) {
+        while (!at(Kind::EndOfFile)) {
+            const auto entry = cursor_;
+            try {
                 root->children.push_back(global_declaration());
+            } catch (ParseFailure& failure) {
+                diagnostics_.push_back(bminor::move(failure.diagnostic));
+                recover(entry, false);
             }
-        } catch (ParseFailure& failure) {
-            diagnostics.push_back(bminor::move(failure.diagnostic));
         }
-        return {bminor::move(root), bminor::move(diagnostics)};
+        return {bminor::move(root), bminor::move(diagnostics_)};
     }
 
 private:
@@ -91,11 +93,15 @@ private:
         return true;
     }
 
-    [[noreturn]] void fail(string_view expected) const {
+    Diagnostic expected(string_view description) const {
         const auto& token = current();
-        throw ParseFailure{{Phase::Syntax, "PARSE_EXPECTED", token.filename, token.span,
-                            "Expected " + string(expected) + ", found " +
-                                string(token_name(token.kind))}};
+        return {Phase::Syntax, "PARSE_EXPECTED", token.filename, token.span,
+                "Expected " + string(description) + ", found " +
+                    string(token_name(token.kind))};
+    }
+
+    [[noreturn]] void fail(string_view description) const {
+        throw ParseFailure{expected(description)};
     }
 
     const Token& expect(Kind kind) {
@@ -107,6 +113,46 @@ private:
 
     bool declaration_start() const {
         return at(Kind::Identifier) && tokens_[cursor_ + 1]->kind == Kind::Colon;
+    }
+
+    bool statement_restart() const {
+        switch (current().kind) {
+        case Kind::IfKeyword:
+        case Kind::ForKeyword:
+        case Kind::PrintKeyword:
+        case Kind::ReturnKeyword:
+        case Kind::LeftBrace:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    void recover(size_t entry, bool in_block) {
+        auto depth = exchange(initializer_depth_, 0);
+        while (!at(Kind::EndOfFile)) {
+            if (depth == 0) {
+                if (accept(Kind::Semicolon)) {
+                    return;
+                }
+                if (at(Kind::RightBrace)) {
+                    // The enclosing block still owns its closing brace.
+                    if (!in_block) {
+                        take();
+                    }
+                    return;
+                }
+                if (cursor_ > entry && (declaration_start() || (in_block && statement_restart()))) {
+                    return;
+                }
+            }
+            if (at(Kind::LeftBrace)) {
+                ++depth;
+            } else if (at(Kind::RightBrace)) {
+                --depth;
+            }
+            take();
+        }
     }
 
     NodePtr global_declaration() {
@@ -200,19 +246,30 @@ private:
             return expression();
         }
         auto node = make_unique<Node>(NodeKind::InitializerList, take().span);
+        ++initializer_depth_;
         do {
             node->children.push_back(initializer());
         } while (accept(Kind::Comma));
         node->span.end = expect(Kind::RightBrace).span.end;
+        --initializer_depth_;
         return node;
     }
 
     NodePtr block() {
         auto node = make_unique<Node>(NodeKind::BlockStmt, expect(Kind::LeftBrace).span);
         while (!at(Kind::RightBrace) && !at(Kind::EndOfFile)) {
-            node->children.push_back(statement());
+            const auto entry = cursor_;
+            try {
+                node->children.push_back(statement());
+            } catch (ParseFailure& failure) {
+                diagnostics_.push_back(bminor::move(failure.diagnostic));
+                recover(entry, true);
+            }
         }
-        node->span.end = expect(Kind::RightBrace).span.end;
+        if (at(Kind::EndOfFile)) {
+            diagnostics_.push_back(expected(token_name(Kind::RightBrace)));
+        }
+        node->span.end = take().span.end;
         return node;
     }
 
@@ -411,7 +468,9 @@ private:
     }
 
     vector<const Token*> tokens_;
+    vector<Diagnostic> diagnostics_;
     size_t cursor_ = 0;
+    size_t initializer_depth_ = 0;
 };
 
 }

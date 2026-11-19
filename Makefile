@@ -4,7 +4,7 @@ CPPFLAGS += -Iinclude
 CXXFLAGS ?= -O2
 CXXFLAGS += -std=c++17 -Wall -Wextra -Wpedantic
 
-.PHONY: all clean test test-core test-lexer test-parser
+.PHONY: all clean test test-core test-lexer test-parser test-recovery
 all: build/bminor-highlight
 
 build/bminor-highlight: build/src/main.o build/src/source.o build/src/lexer.o build/src/parser.o
@@ -19,11 +19,14 @@ build/test-lexer: build/tests/lexer.o build/src/source.o build/src/lexer.o
 build/test-parser: build/tests/parser.o build/src/source.o build/src/lexer.o build/src/parser.o
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+build/test-recovery: build/tests/recovery.o build/src/source.o build/src/lexer.o build/src/parser.o
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 build/%.o: %.cpp
 	mkdir -p $(@D)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c -o $@ $<
 
-test: test-core test-lexer test-parser
+test: test-core test-lexer test-parser test-recovery
 
 test-core: build/test-core
 	./build/test-core
@@ -33,6 +36,9 @@ test-lexer: build/test-lexer
 
 test-parser: build/test-parser
 	./build/test-parser
+
+test-recovery: build/test-recovery
+	timeout 10s ./build/test-recovery
 
 clean:
 	rm -rf build
