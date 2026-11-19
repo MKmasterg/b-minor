@@ -13,5 +13,6 @@ using std::string_view;
 using std::vector;
 
 string render_ansi(string_view source, const vector<HighlightSpan>& spans);
+string render_html(string_view source, const vector<HighlightSpan>& spans);
 
 }
