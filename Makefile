@@ -1,8 +1,7 @@
 .DEFAULT_GOAL := all
 
-CPPFLAGS += -Iinclude
 CXXFLAGS ?= -O2
-CXXFLAGS += -std=c++17 -Wall -Wextra -Wpedantic
+PROJECT_CXXFLAGS := -std=c++17 -Wall -Wextra -Wpedantic
 
 ANALYSIS_OBJECTS := build/src/source.o build/src/lexer.o build/src/parser.o build/src/highlight.o
 
@@ -37,7 +36,7 @@ build/test-html: build/tests/html.o build/src/source.o build/src/lexer.o build/s
 
 build/%.o: %.cpp
 	mkdir -p $(@D)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c -o $@ $<
+	$(CXX) -Iinclude $(CPPFLAGS) $(PROJECT_CXXFLAGS) $(CXXFLAGS) -MMD -MP -c -o $@ $<
 
 test: test-core test-lexer test-parser test-recovery test-highlight test-ansi test-cli
 
