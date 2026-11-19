@@ -35,9 +35,10 @@ void require(bool condition, string_view fixture, string_view check) {
 }
 
 bminor::LexResult check_stream(string_view fixture, string_view source,
-                             const vector<ExpectedToken>& expected) {
+                             const vector<ExpectedToken>& expected,
+                             size_t diagnostic_count = 0) {
     auto result = bminor::lex(source, filename);
-    require(result.diagnostics.empty(), fixture, "unexpected lexical diagnostic");
+    require(result.diagnostics.size() == diagnostic_count, fixture, "incorrect diagnostic count");
     require(result.tokens.size() == expected.size() + 1, fixture, "incorrect token count");
 
     size_t offset = 0;
@@ -159,6 +160,90 @@ void check_positions() {
             "empty source", "incorrect EOF location");
 }
 
+void check_error(string_view fixture, string_view malformed,
+                 string_view code, string_view recovery_gap = {}) {
+    constexpr string_view prefix = "x\r\n\t";
+    string source(prefix);
+    source += malformed;
+    vector<ExpectedToken> expected = {
+        {Kind::Identifier, "x"}, {Kind::Whitespace, "\r\n\t"}, {Kind::Invalid, malformed},
+    };
+    if (!recovery_gap.empty()) {
+        source += recovery_gap;
+        source += "return";
+        expected.push_back({Kind::Whitespace, recovery_gap});
+        expected.push_back({Kind::ReturnKeyword, "return"});
+    }
+    auto result = check_stream(fixture, source, expected, 1);
+    const auto& diagnostic = result.diagnostics.front();
+    const auto& token = result.tokens[2];
+    require(diagnostic.phase == bminor::Phase::Lexical && diagnostic.code == code &&
+                diagnostic.filename == filename && !diagnostic.message.empty(),
+            fixture, "incorrect diagnostic identity");
+    require(diagnostic.span.begin == prefix.size() &&
+                diagnostic.span.end == prefix.size() + malformed.size() &&
+                diagnostic.span.start.line == 2 && diagnostic.span.start.column == 2,
+            fixture, "incorrect diagnostic span");
+    require(token.span.start.line == 2 && token.span.start.column == 2 && !token.decoded,
+            fixture, "invalid token should have a location and no decoded payload");
+}
+
+void check_invalid_tokens() {
+    check_error("unknown byte", "@", "LEX_UNKNOWN_BYTE", " ");
+    check_error("unknown NUL byte", string_view("\0", 1), "LEX_UNKNOWN_BYTE", " ");
+    check_error("empty character", "''", "LEX_BAD_LITERAL", " ");
+    check_error("oversize character", "'ab'", "LEX_BAD_LITERAL", " ");
+    check_error("unterminated character", "'a", "LEX_UNTERMINATED_CHAR", "\r");
+    check_error("unterminated string before CRLF", "\"abc", "LEX_UNTERMINATED_STRING", "\r\n");
+    check_error("backslash before newline", "\"a\\", "LEX_UNTERMINATED_STRING", "\n");
+    check_error("backslash at EOF", "\"a\\", "LEX_UNTERMINATED_STRING");
+    check_error("character backslash at EOF", "'\\", "LEX_UNTERMINATED_CHAR");
+    check_error("unterminated block comment", "/* abc\r\nreturn", "LEX_UNTERMINATED_COMMENT");
+    check_error("non-ASCII string payload", "\"a\x80\"", "LEX_BAD_LITERAL", " ");
+    check_error("non-ASCII character escape", "'\\\x80'", "LEX_BAD_LITERAL", " ");
+    check_error("malformed string also unterminated", "\"\x80", "LEX_UNTERMINATED_STRING", "\n");
+
+    auto result = check_stream("unknown bytes consumed separately", "\xc3\xa9" "return", {
+        {Kind::Invalid, "\xc3"}, {Kind::Invalid, "\xa9"}, {Kind::ReturnKeyword, "return"},
+    }, 2);
+    for (size_t i = 0; i < result.diagnostics.size(); ++i) {
+        const auto& error = result.diagnostics[i];
+        require(error.code == "LEX_UNKNOWN_BYTE" && error.span.begin == i &&
+                    error.span.end == i + 1 && error.span.start.column == i + 1,
+                "unknown bytes consumed separately", "incorrect individual byte diagnostic");
+    }
+}
+
+void check_lengths() {
+    const string identifier(256, 'x');
+    check_stream("256-byte identifier", identifier, {{Kind::Identifier, identifier}});
+    check_error("257-byte identifier", identifier + 'x', "LEX_IDENT_LENGTH", " ");
+
+    const string plaintext(256, 'x');
+    const string max_string = '"' + plaintext + '"';
+    auto result = check_stream("256-byte string", max_string, {{Kind::StringLiteral, max_string}});
+    require(result.tokens.front().decoded == plaintext, "256-byte string", "incorrect payload");
+
+    string escapes;
+    for (size_t i = 0; i < 256; ++i) {
+        escapes += "\\0";
+    }
+    const string escaped_string = '"' + escapes + '"';
+    result = check_stream("512 raw bytes decode to 256", escaped_string,
+                          {{Kind::StringLiteral, escaped_string}});
+    require(result.tokens.front().decoded == string(256, '\0'),
+            "512 raw bytes decode to 256", "incorrect NUL payload");
+
+    check_error("257-byte string", '"' + plaintext + "x\"", "LEX_BAD_LITERAL", " ");
+    check_error("oversize string also unterminated", '"' + plaintext + 'x',
+                "LEX_UNTERMINATED_STRING", "\n");
+
+    const string raw_nul("\"a\0b\"", 5);
+    result = check_stream("raw NUL in quoted payload", raw_nul, {{Kind::StringLiteral, raw_nul}});
+    require(result.tokens.front().decoded == string("a\0b", 3),
+            "raw NUL in quoted payload", "incorrect embedded raw NUL");
+}
+
 }
 
 int main() {
@@ -166,4 +251,6 @@ int main() {
     check_operators_and_delimiters();
     check_literals();
     check_positions();
+    check_invalid_tokens();
+    check_lengths();
 }

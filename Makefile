@@ -26,7 +26,7 @@ test-core: build/test-core
 	./build/test-core
 
 test-lexer: build/test-lexer
-	./build/test-lexer
+	timeout 10s ./build/test-lexer
 
 clean:
 	rm -rf build
