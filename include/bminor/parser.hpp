@@ -12,6 +12,6 @@ struct ParseResult {
     vector<Diagnostic> diagnostics;
 };
 
-ParseResult parse_expression(const vector<Token>& tokens);
+ParseResult parse(const vector<Token>& tokens);
 
 }

@@ -57,14 +57,18 @@ public:
         }
     }
 
-    ParseResult expression_result() {
+    ParseResult program() {
+        auto root = make_unique<Node>(NodeKind::Program, Span{});
+        root->span.end = tokens_.back()->span.end;
+        vector<Diagnostic> diagnostics;
         try {
-            auto root = expression();
-            expect(Kind::EndOfFile);
-            return {bminor::move(root), {}};
+            while (!at(Kind::EndOfFile)) {
+                root->children.push_back(global_declaration());
+            }
         } catch (ParseFailure& failure) {
-            return {nullptr, {bminor::move(failure.diagnostic)}};
+            diagnostics.push_back(bminor::move(failure.diagnostic));
         }
+        return {bminor::move(root), bminor::move(diagnostics)};
     }
 
 private:
@@ -99,6 +103,189 @@ private:
             fail(token_name(kind));
         }
         return take();
+    }
+
+    bool declaration_start() const {
+        return at(Kind::Identifier) && tokens_[cursor_ + 1]->kind == Kind::Colon;
+    }
+
+    NodePtr global_declaration() {
+        const auto& name = expect(Kind::Identifier);
+        expect(Kind::Colon);
+        if (accept(Kind::FunctionKeyword)) {
+            return function_tail(name);
+        }
+        return variable_tail(name);
+    }
+
+    NodePtr function_tail(const Token& name) {
+        auto node = make_unique<Node>(NodeKind::FuncDecl, name.span);
+        node->children.push_back(leaf(NodeKind::Identifier, name));
+        if (at(Kind::VoidKeyword)) {
+            node->children.push_back(leaf(NodeKind::AtomType, take()));
+        } else {
+            node->children.push_back(atom_type());
+        }
+        expect(Kind::LeftParen);
+        if (!at(Kind::RightParen)) {
+            do {
+                node->children.push_back(parameter());
+            } while (accept(Kind::Comma));
+        }
+        expect(Kind::RightParen);
+        if (at(Kind::Semicolon)) {
+            node->span.end = take().span.end;
+            node->children.push_back(nullptr);
+        } else {
+            expect(Kind::Assign);
+            auto body = block();
+            node->span.end = body->span.end;
+            node->children.push_back(bminor::move(body));
+        }
+        return node;
+    }
+
+    NodePtr parameter() {
+        const auto& name = expect(Kind::Identifier);
+        expect(Kind::Colon);
+        auto type = compound_type(true);
+        auto node = make_unique<Node>(NodeKind::Param, through(name.span, type->span));
+        node->children.push_back(leaf(NodeKind::Identifier, name));
+        node->children.push_back(bminor::move(type));
+        return node;
+    }
+
+    NodePtr atom_type() {
+        switch (current().kind) {
+        case Kind::IntegerKeyword:
+        case Kind::BooleanKeyword:
+        case Kind::CharKeyword:
+        case Kind::StringKeyword:
+            return leaf(NodeKind::AtomType, take());
+        default:
+            fail("integer, boolean, char or string");
+        }
+    }
+
+    NodePtr compound_type(bool allow_unsized_array) {
+        if (!at(Kind::ArrayKeyword)) {
+            return atom_type();
+        }
+        const auto& keyword = take();
+        expect(Kind::LeftBracket);
+        NodePtr bound;
+        if (!allow_unsized_array || !at(Kind::RightBracket)) {
+            bound = leaf(NodeKind::Literal, expect(Kind::IntegerLiteral));
+        }
+        expect(Kind::RightBracket);
+        auto element = compound_type(allow_unsized_array);
+        auto node = make_unique<Node>(NodeKind::ArrayType, through(keyword.span, element->span));
+        node->token_kind = keyword.kind;
+        node->children.push_back(bminor::move(bound));
+        node->children.push_back(bminor::move(element));
+        return node;
+    }
+
+    NodePtr variable_tail(const Token& name) {
+        auto node = make_unique<Node>(NodeKind::VarDecl, name.span);
+        node->children.push_back(leaf(NodeKind::Identifier, name));
+        node->children.push_back(compound_type(false));
+        node->children.push_back(accept(Kind::Assign) ? initializer() : nullptr);
+        node->span.end = expect(Kind::Semicolon).span.end;
+        return node;
+    }
+
+    NodePtr initializer() {
+        if (!at(Kind::LeftBrace)) {
+            return expression();
+        }
+        auto node = make_unique<Node>(NodeKind::InitializerList, take().span);
+        do {
+            node->children.push_back(initializer());
+        } while (accept(Kind::Comma));
+        node->span.end = expect(Kind::RightBrace).span.end;
+        return node;
+    }
+
+    NodePtr block() {
+        auto node = make_unique<Node>(NodeKind::BlockStmt, expect(Kind::LeftBrace).span);
+        while (!at(Kind::RightBrace) && !at(Kind::EndOfFile)) {
+            node->children.push_back(statement());
+        }
+        node->span.end = expect(Kind::RightBrace).span.end;
+        return node;
+    }
+
+    NodePtr statement() {
+        switch (current().kind) {
+        case Kind::LeftBrace:
+            return block();
+        case Kind::IfKeyword:
+            return if_statement();
+        case Kind::ForKeyword:
+            return for_statement();
+        case Kind::ReturnKeyword:
+            return return_statement();
+        case Kind::PrintKeyword:
+            return print_statement();
+        case Kind::Semicolon:
+            return make_unique<Node>(NodeKind::EmptyStmt, take().span);
+        default:
+            if (declaration_start()) {
+                const auto& name = take();
+                expect(Kind::Colon);
+                return variable_tail(name);
+            }
+            auto value = expression();
+            auto node = make_unique<Node>(NodeKind::ExprStmt,
+                                                through(value->span, expect(Kind::Semicolon).span));
+            node->children.push_back(bminor::move(value));
+            return node;
+        }
+    }
+
+    NodePtr if_statement() {
+        auto node = make_unique<Node>(NodeKind::IfStmt, expect(Kind::IfKeyword).span);
+        expect(Kind::LeftParen);
+        node->children.push_back(expression());
+        expect(Kind::RightParen);
+        node->children.push_back(statement());
+        node->children.push_back(accept(Kind::ElseKeyword) ? statement() : nullptr);
+        const auto& last_branch = node->children[2] ? node->children[2] : node->children[1];
+        node->span.end = last_branch->span.end;
+        return node;
+    }
+
+    NodePtr optional_expression(Kind delimiter) {
+        return at(delimiter) ? nullptr : expression();
+    }
+
+    NodePtr for_statement() {
+        auto node = make_unique<Node>(NodeKind::ForStmt, expect(Kind::ForKeyword).span);
+        expect(Kind::LeftParen);
+        node->children.push_back(optional_expression(Kind::Semicolon));
+        expect(Kind::Semicolon);
+        node->children.push_back(optional_expression(Kind::Semicolon));
+        expect(Kind::Semicolon);
+        node->children.push_back(optional_expression(Kind::RightParen));
+        expect(Kind::RightParen);
+        node->children.push_back(statement());
+        node->span.end = node->children.back()->span.end;
+        return node;
+    }
+
+    NodePtr return_statement() {
+        auto node = make_unique<Node>(NodeKind::ReturnStmt, expect(Kind::ReturnKeyword).span);
+        node->children.push_back(optional_expression(Kind::Semicolon));
+        node->span.end = expect(Kind::Semicolon).span.end;
+        return node;
+    }
+
+    NodePtr print_statement() {
+        auto node = make_unique<Node>(NodeKind::PrintStmt, expect(Kind::PrintKeyword).span);
+        arguments(*node);
+        node->span.end = expect(Kind::Semicolon).span.end;
+        return node;
     }
 
     NodePtr expression() { return assignment(); }
@@ -229,8 +416,8 @@ private:
 
 }
 
-ParseResult parse_expression(const vector<Token>& tokens) {
-    return Parser(tokens).expression_result();
+ParseResult parse(const vector<Token>& tokens) {
+    return Parser(tokens).program();
 }
 
 }

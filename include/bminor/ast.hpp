@@ -15,6 +15,20 @@ using std::unique_ptr;
 using std::vector;
 
 enum class NodeKind {
+    Program,
+    VarDecl,
+    FuncDecl,
+    Param,
+    AtomType,
+    ArrayType,
+    InitializerList,
+    BlockStmt,
+    IfStmt,
+    ForStmt,
+    ReturnStmt,
+    PrintStmt,
+    ExprStmt,
+    EmptyStmt,
     Identifier,
     Literal,
     GroupExpr,

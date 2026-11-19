@@ -1,0 +1,15 @@
+// The row parameter of read_row omits its array bound.
+seed: integer = 3;
+matrix: array [2] array [2] integer = {{1, 2}, {3, seed}};
+read_row: function integer (row: array [] integer, flags: array [2] boolean);
+
+main: function void () = {
+    index: integer = 0;
+    flags: array [2] boolean = {true, false};
+    { print "row <tag>", index, read_row(matrix[0], flags); }
+    if (seed > 0) if (index > 0) seed++; else seed--;
+    for (index = 0; index < 2; index++) { print matrix[index][0]; }
+    for (;;) ;
+    ;
+    return;
+}
