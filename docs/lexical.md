@@ -61,6 +61,9 @@ A string can have a maximum of
 
 ## Invalid input
 
+The scanner gives one diagnostic for the full span of each invalid token.
+It continues at the next byte after the span.
+
 - If an identifier has more than 256 bytes, the scanner reads the full
   identifier and gives `LEX_IDENT_LENGTH`.
 - For a closed literal with invalid payload bytes or an invalid length, the
