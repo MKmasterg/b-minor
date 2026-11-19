@@ -42,6 +42,27 @@ enum class NodeKind {
 
 struct Node {
     Node(NodeKind kind, Span span) : kind(kind), span(span) {}
+    Node(Node&&) = default;
+    Node& operator=(Node&&) = default;
+
+    ~Node() {
+        // Detach children before deleting them to bound teardown stack depth.
+        Node* node = this;
+        while (!node->children.empty() || node != this) {
+            if (!node->children.empty()) {
+                auto* child = node->children.back().release();
+                node->children.pop_back();
+                if (child) {
+                    child->destruction_parent_ = node;
+                    node = child;
+                }
+            } else {
+                auto* parent = node->destruction_parent_;
+                delete node;
+                node = parent;
+            }
+        }
+    }
 
     NodeKind kind;
     Span span;
@@ -50,6 +71,9 @@ struct Node {
     string text;
     optional<string> decoded;
     vector<unique_ptr<Node>> children;
+
+private:
+    Node* destruction_parent_ = nullptr;
 };
 
 }

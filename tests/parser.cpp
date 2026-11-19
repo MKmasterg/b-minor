@@ -14,6 +14,7 @@ using std::exit;
 using std::ifstream;
 using std::ios;
 using std::istreambuf_iterator;
+using std::make_unique;
 using std::move;
 using std::size_t;
 using std::string;
@@ -262,6 +263,16 @@ void check_program_shapes() {
     check_annotations(*other);
 }
 
+void check_deep_tree_destruction() {
+    auto root = make_unique<Node>(NodeKind::Literal, bminor::Span{});
+    for (size_t depth = 0; depth < 300'000; ++depth) {
+        auto parent = make_unique<Node>(NodeKind::GroupExpr, bminor::Span{});
+        parent->children.push_back(::move(root));
+        root = ::move(parent);
+    }
+    root.reset();
+}
+
 }
 
 int main() {
@@ -275,4 +286,5 @@ int main() {
     check_shape("a[0][1]++", "postfix ++(index(index(a, 0), 1))");
     check_multiline_locations();
     check_program_shapes();
+    check_deep_tree_destruction();
 }
