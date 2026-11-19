@@ -130,3 +130,24 @@ table has a null slot.
 | Array type | Optional bound, element type |
 | `if` | Condition, then branch, optional else branch |
 | `for` | Slots for all three optional expressions, body |
+
+## Recovery
+
+The parser skips trivia and invalid tokens. Trivia is the set of
+whitespace and comment tokens.
+
+`classify` receives all tokens. It can apply styles to comments and
+invalid tokens.
+
+If a child fails, the program or block reports the unexpected token. It
+discards the unfinished child. Recovery consumes a semicolon or stops
+before the closing brace of the block.
+
+If recovery moves past the start of the failed child, it can stop before
+a new declaration. In a block, it can also stop before `{`, `if`, `for`,
+`print` or `return`.
+
+Recovery tracks brace groups, including initializer braces that the
+failed child opened. It skips semicolons and possible sibling starts
+inside these groups. If a block reaches EOF, the parser reports the
+missing brace and returns the children that it has.
